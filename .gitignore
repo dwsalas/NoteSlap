@@ -1,0 +1,23 @@
+# Personal working notes — not part of the project
+CLAUDE.md
+.claude/
+NOTES.md
+TODO.md
+
+# Local config and secrets
+.env
+.env.*
+*.local
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Dependencies, if any ever appear
+node_modules/

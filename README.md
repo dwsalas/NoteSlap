@@ -1,25 +1,78 @@
 # NoteSlap
 
-Turn study notes into typing drills. Upload a PDF, DOCX or TXT; the browser extracts the text,
-splits it into short factual sentences, and you type them back. No backend, no build step.
+Turn your study notes into typing drills. Upload a PDF, DOCX or TXT; NoteSlap pulls out the
+facts, and you type them back. Retyping a definition from memory beats rereading it.
 
-Sentence splitting runs three ways:
+**[Try it →](https://dwsalas.github.io/NoteSlap/)**
 
-- **Rules only** — algorithmic sentence segmentation. Instant, offline, no model.
-- **Local model** — a local [Ollama](https://ollama.com) instance rewrites the notes into clean,
-  self-contained sentences. Better output, because it can fix fragments and resolve "this" and "it".
-- **In this browser** — the same rewrite, done by a small model running in-tab via
-  [WebLLM](https://github.com/mlc-ai/web-llm) and WebGPU. No install, no server — just a one-time
-  model download the browser caches. Needs a browser with WebGPU (recent Chrome or Edge); the
-  option disables itself with an explanation otherwise.
-
-On load, the app pings Ollama and picks whichever mode actually works — Ollama first, then the
-in-browser model if WebGPU is available, then Rules only — so a first-time visitor never lands on
-a broken connection.
+Everything runs in your browser. Your files are never uploaded anywhere.
 
 ---
 
-## Run it locally
+## How it works
+
+1. **Load** a document, or paste text.
+2. **Split** it into short factual sentences — three ways to do this, see below.
+3. **Review** the lines. Edit what reads badly, delete what isn't worth knowing.
+4. **Type** them, with live WPM, accuracy, and a highlighter that fills in behind your correct keystrokes.
+
+The results screen leads with lines typed clean on the first try, not words per minute. Speed is
+a side effect; recall is the point.
+
+---
+
+## Three ways to split
+
+| Mode | Needs | First run | Quality |
+| --- | --- | --- | --- |
+| **Rules only** | nothing | instant | decent |
+| **In this browser** | WebGPU | one model download | good |
+| **Local model** | [Ollama](https://ollama.com) | instant | best |
+
+NoteSlap picks a mode that works when the page loads, so you can ignore this section entirely if
+you want to. Change it under *Pick a splitter*.
+
+### Rules only
+
+Algorithmic sentence segmentation. No model, no network, no wait. It handles hard-wrapped PDF
+paragraphs, strips headers, page numbers, citations and table rows, and flattens curly quotes and
+em dashes into characters you can actually type.
+
+### In this browser
+
+Runs a small language model on your own GPU through [WebLLM](https://github.com/mlc-ai/web-llm).
+No install, no account, no API key — and your notes still never leave the machine.
+
+The first load downloads model weights, roughly 0.6–2 GB depending on which model you pick. Your
+browser caches them, so it only happens once. The smallest models are listed first on purpose:
+this task is sentence rewriting, not reasoning, and a 1B model does it nearly as well as a 7B in a
+quarter of the download.
+
+Needs WebGPU — Chrome or Edge 113+, or Safari 18+. Where it's unavailable the option is disabled
+and rules-only takes over.
+
+### Local model
+
+If you already run Ollama, NoteSlap will use it. Best output, since a larger model can repair
+fragments and resolve dangling references like "this" and "it".
+
+Ollama blocks cross-origin requests by default, so allow the page's origin:
+
+```bash
+OLLAMA_ORIGINS="http://localhost:8080" ollama serve
+```
+
+On Windows, set `OLLAMA_ORIGINS` as an environment variable, then quit Ollama from the system
+tray and relaunch it — closing the window isn't enough.
+
+The hosted version is served over HTTPS while Ollama listens on HTTP, which browsers may block as
+mixed content. If the connection dot stays red, run NoteSlap locally instead.
+
+---
+
+## Run it yourself
+
+No build step, nothing to install.
 
 ```bash
 git clone https://github.com/dwsalas/NoteSlap.git
@@ -27,118 +80,16 @@ cd NoteSlap
 python3 -m http.server 8080
 ```
 
-Open <http://localhost:8080>. In VS Code the Live Server extension works too — right-click
-`index.html` → *Open with Live Server*.
+Open <http://localhost:8080>.
 
-Do not open `index.html` with `file://`. `pdf.js` loads a worker over HTTP and will fail.
+Serve it over HTTP rather than opening `index.html` directly — `pdf.js` loads a worker script and
+will fail on `file://`.
 
----
+### Deploy your own copy
 
-## Ollama setup (Linux / Kali)
-
-```bash
-# install
-curl -fsSL https://ollama.com/install.sh | sh
-
-# pull a small, fast model
-ollama pull llama3.2:3b
-```
-
-### Allow the browser to call Ollama
-
-Ollama rejects cross-origin requests by default. `OLLAMA_ORIGINS` is the allowlist.
-
-**Quick test — foreground:**
-
-```bash
-sudo systemctl stop ollama          # free port 11434 first
-OLLAMA_HOST=127.0.0.1:11434 OLLAMA_ORIGINS="*" ollama serve
-```
-
-**Permanent — systemd:**
-
-```bash
-sudo systemctl edit ollama.service
-```
-
-Add:
-
-```ini
-[Service]
-Environment="OLLAMA_ORIGINS=*"
-```
-
-Then:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart ollama
-systemctl show ollama --property=Environment    # confirm it took
-```
-
-**Verify:**
-
-```bash
-curl http://localhost:11434/api/tags
-curl -i -X OPTIONS http://localhost:11434/api/generate \
-  -H "Origin: https://dwsalas.github.io" \
-  -H "Access-Control-Request-Method: POST" \
-  -H "Access-Control-Request-Headers: content-type"
-```
-
-The second command must return `Access-Control-Allow-Origin`. If it doesn't, the environment
-variable hasn't reached the running process.
-
-`OLLAMA_ORIGINS="*"` lets **any** page you visit talk to your models. Once it works, narrow it:
-
-```ini
-Environment="OLLAMA_ORIGINS=https://dwsalas.github.io,http://localhost:8080"
-```
-
----
-
-## The HTTPS problem
-
-GitHub Pages serves over `https://`. Ollama listens on `http://`. Browsers call that mixed
-content and may block the request before Ollama ever sees it. Options, best first:
-
-1. **Run the app locally** over `http://localhost:8080` and keep the Pages copy for the
-   rules-only mode. Nothing to configure, works in every browser.
-2. **Allow insecure content for the site.** Chrome/Edge: click the icon left of the address bar →
-   *Site settings* → *Insecure content* → **Allow**, then reload. Chromium treats
-   `http://localhost` as trustworthy, so this usually just works.
-3. **Put Ollama behind HTTPS** with Caddy or a tunnel, and point the host field at that URL.
-
-Firefox and Safari are stricter than Chromium here. Use option 1 if the connection dot stays red.
-
----
-
-## Deploy to GitHub Pages
-
-```bash
-cd NoteSlap
-git init -b main
-git add .
-git commit -m "Initial commit"
-
-# create the repo on github.com first, then:
-git remote add origin https://github.com/dwsalas/NoteSlap.git
-git push -u origin main
-```
-
-On GitHub: **Settings → Pages → Source: Deploy from a branch → Branch: `main` / `(root)` → Save.**
-
-Live at `https://dwsalas.github.io/NoteSlap/` after a minute or two.
-
-For a bare `dwsalas.github.io` URL, name the repo exactly `dwsalas.github.io`.
-
-To push later changes:
-
-```bash
-git add .
-git commit -m "Tune the sentence filter"
-git push
-```
+Fork the repo, then **Settings → Pages → Deploy from a branch → `main` / `(root)`**. Live at
+`https://YOUR-USERNAME.github.io/NoteSlap/` within a couple of minutes. The files must stay at the
+repository root.
 
 ---
 
@@ -148,17 +99,33 @@ git push
 | --- | --- |
 | `tab` | Restart the current line |
 | `esc` | Back to the deck |
-| `ctrl` + `/` | Skip the line, mark it missed |
+| `ctrl` + `/` | Skip the line and mark it missed |
 
 ---
 
-## Files
+## Privacy
 
-```
-NoteSlap/
-├── index.html    Markup and CDN script tags
-├── styles.css    Theme tokens, layout, typing canvas
-├── app.js        Extraction, splitting, Ollama, typing engine
-├── .nojekyll     Stops GitHub Pages running Jekyll over the files
-└── README.md
-```
+Documents are parsed in the browser and never sent to a server. The rules and in-browser modes
+make no network calls at all once the page has loaded. The Ollama mode talks only to the address
+you enter, which is your own machine by default.
+
+Drill lines are kept in `localStorage` so a session survives a refresh. Clearing site data removes
+them.
+
+---
+
+## Built with
+
+Vanilla HTML, CSS and JavaScript — no framework, no bundler, no npm.
+[pdf.js](https://mozilla.github.io/pdf.js/) for PDFs,
+[mammoth.js](https://github.com/mwilliamson/mammoth.js) for DOCX, and
+[WebLLM](https://github.com/mlc-ai/web-llm) for in-browser inference.
+
+## Contributing
+
+Issues and pull requests welcome. The whole app is three files at the repo root: `index.html`,
+`styles.css`, `app.js`.
+
+## License
+
+MIT
