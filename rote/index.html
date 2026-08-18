@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NoteSlap — type your notes back to yourself</title>
+<meta name="description" content="Turn PDF, DOCX and TXT study notes into typing drills. Runs entirely in your browser, with an optional local Ollama model.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='22' y='5' rx='3' fill='%23151E24'/><rect x='6' y='19' width='20' height='4' rx='1' fill='%23D9EF7B'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="mixed-warning" class="banner" hidden>
+  <strong>This page is on HTTPS and Ollama is on HTTP.</strong>
+  <span>Your browser may block the connection. Allow insecure content for this site, or run the app locally over <code>http://</code>. See the README.</span>
+  <button class="banner-x" type="button" data-close-banner aria-label="Dismiss">&times;</button>
+</div>
+
+<header class="topbar">
+  <div class="wordmark">
+    <span class="wordmark-text">noteslap</span>
+    <span class="wordmark-mark" aria-hidden="true"></span>
+  </div>
+  <p class="tagline">Type your notes back to yourself</p>
+  <div class="topbar-right">
+    <span id="conn" class="conn conn-idle" role="status">
+      <span class="conn-dot" aria-hidden="true"></span><span id="conn-label">Not connected</span>
+    </span>
+    <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle dark mode">◐</button>
+  </div>
+</header>
+
+<main>
+
+<!-- ─────────────────────────── SETUP ─────────────────────────── -->
+<section id="screen-setup" class="screen is-active">
+
+  <div class="grid">
+
+    <div class="panel">
+      <p class="eyebrow">Step one</p>
+      <h2>Load your notes</h2>
+
+      <div id="drop" class="drop" tabindex="0" role="button"
+           aria-label="Choose files or drop them here">
+        <p class="drop-title">Drop a file, or click to choose</p>
+        <p class="drop-sub">PDF, DOCX or TXT — parsed in your browser, never uploaded</p>
+        <input id="file-input" type="file" accept=".pdf,.docx,.txt,.md" multiple hidden>
+      </div>
+
+      <ul id="file-list" class="file-list"></ul>
+
+      <label class="field">
+        <span class="field-label">Or paste text</span>
+        <textarea id="paste" rows="4" placeholder="Paste lecture notes here…"></textarea>
+      </label>
+
+      <p id="extract-status" class="status" role="status"></p>
+    </div>
+
+    <div class="panel">
+      <p class="eyebrow">Step two</p>
+      <h2>Pick a splitter</h2>
+
+      <div class="radio-set" role="radiogroup" aria-label="Splitting method">
+        <label class="radio">
+          <input type="radio" name="mode" value="ollama" checked>
+          <span class="radio-body">
+            <span class="radio-title">Local model</span>
+            <span class="radio-sub">Ollama rewrites your notes into clean, self-contained sentences</span>
+          </span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="mode" value="rules">
+          <span class="radio-body">
+            <span class="radio-title">Rules only</span>
+            <span class="radio-sub">Algorithmic sentence splitting. No model, instant, works offline</span>
+          </span>
+        </label>
+      </div>
+
+      <fieldset id="ollama-opts" class="opts">
+        <label class="field">
+          <span class="field-label">Ollama host</span>
+          <span class="field-row">
+            <input id="host" type="text" value="http://localhost:11434" spellcheck="false">
+            <button id="connect" class="btn btn-ghost" type="button">Connect</button>
+          </span>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Model</span>
+          <select id="model"><option value="">Connect to load models</option></select>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Chunk size <span id="chunk-out" class="field-value">3500</span> characters</span>
+          <input id="chunk" type="range" min="1500" max="8000" step="500" value="3500">
+        </label>
+      </fieldset>
+
+      <div class="actions">
+        <button id="build" class="btn btn-primary" type="button" disabled>Build drill set</button>
+        <button id="cancel" class="btn btn-ghost" type="button" hidden>Cancel</button>
+      </div>
+
+      <div id="progress" class="progress" hidden>
+        <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+        <p id="progress-label" class="status" role="status"></p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ─────────────────────────── DECK ─────────────────────────── -->
+<section id="screen-deck" class="screen">
+  <div class="deck-head">
+    <div>
+      <p class="eyebrow">Step three</p>
+      <h2>Check the lines</h2>
+      <p class="status">Edit anything that reads badly. Delete anything that isn't worth recalling.</p>
+    </div>
+    <div class="actions">
+      <button id="deck-back" class="btn btn-ghost" type="button">Back</button>
+      <button id="start" class="btn btn-primary" type="button">Start typing</button>
+    </div>
+  </div>
+  <ol id="deck" class="deck"></ol>
+</section>
+
+<!-- ─────────────────────────── TYPING ─────────────────────────── -->
+<section id="screen-type" class="screen">
+  <div class="stats" id="stats">
+    <div class="stat"><span class="stat-num" id="s-wpm">0</span><span class="stat-key">wpm</span></div>
+    <div class="stat"><span class="stat-num" id="s-acc">100</span><span class="stat-key">% acc</span></div>
+    <div class="stat"><span class="stat-num" id="s-time">0:00</span><span class="stat-key">time</span></div>
+    <div class="stat stat-right"><span class="stat-num" id="s-pos">1</span><span class="stat-key">of <span id="s-total">1</span></span></div>
+  </div>
+
+  <div id="stage" class="stage">
+    <div id="line" class="line" aria-live="off"></div>
+    <div id="caret" class="caret" aria-hidden="true"></div>
+    <input id="capture" class="capture" autocomplete="off" autocorrect="off"
+           autocapitalize="off" spellcheck="false" aria-label="Typing input">
+    <div id="veil" class="veil"><span>Click here or press any key to focus</span></div>
+  </div>
+
+  <div class="type-foot">
+    <span><kbd>tab</kbd> restart line</span>
+    <span><kbd>esc</kbd> back to deck</span>
+    <span id="peek-wrap"><kbd>ctrl</kbd> + <kbd>/</kbd> skip line</span>
+  </div>
+</section>
+
+<!-- ─────────────────────────── RESULTS ─────────────────────────── -->
+<section id="screen-results" class="screen">
+  <p class="eyebrow">Session done</p>
+  <p class="hero"><span id="r-clean">0</span><span class="hero-slash">/</span><span id="r-lines">0</span></p>
+  <p class="hero-label">lines typed clean, first try</p>
+
+  <div class="result-grid">
+    <div class="metric"><span class="metric-key">Speed</span><span class="metric-num" id="r-wpm">0</span><span class="metric-unit">wpm</span></div>
+    <div class="metric"><span class="metric-key">Accuracy</span><span class="metric-num" id="r-acc">0</span><span class="metric-unit">%</span></div>
+    <div class="metric"><span class="metric-key">Time</span><span class="metric-num" id="r-time">0:00</span><span class="metric-unit"></span></div>
+    <div class="metric"><span class="metric-key">Keystrokes</span><span class="metric-num" id="r-keys">0</span><span class="metric-unit"></span></div>
+  </div>
+
+  <div class="actions">
+    <button id="again" class="btn btn-primary" type="button">Run it again</button>
+    <button id="review" class="btn btn-ghost" type="button">Drill the missed lines</button>
+    <button id="results-deck" class="btn btn-ghost" type="button">Back to deck</button>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <span>Everything runs in your browser. Files never leave your machine.</span>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
