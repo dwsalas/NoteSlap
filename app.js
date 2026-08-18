@@ -280,6 +280,18 @@ function chunkText(text, size) {
 const WEBLLM_URL = 'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.84/+esm';
 let webllmModulePromise = null;
 
+/** `'gpu' in navigator` only checks the API exists, not that a real adapter can be found —
+ *  VMs, remote desktops, and some integrated GPUs expose the API but fail here. */
+async function webgpuAdapterAvailable() {
+  if (!('gpu' in navigator)) return false;
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    return !!adapter;
+  } catch {
+    return false;
+  }
+}
+
 function loadWebllmModule() {
   if (!webllmModulePromise) webllmModulePromise = import(WEBLLM_URL);
   return webllmModulePromise;
@@ -801,11 +813,12 @@ $('#theme-toggle').addEventListener('click', () => {
 
   $('#host').value = store.get('host', 'http://localhost:11434');
 
-  const hasWebgpu = 'gpu' in navigator;
+  const hasWebgpu = await webgpuAdapterAvailable();
   if (!hasWebgpu) {
     $('input[name="mode"][value="webllm"]').disabled = true;
-    $('#webllm-sub').textContent =
-      "This browser doesn't support WebGPU, so in-browser models can't run here. Try a recent Chrome or Edge on desktop.";
+    $('#webllm-sub').textContent = 'gpu' in navigator
+      ? "Your browser supports the WebGPU API, but no compatible GPU adapter was found (common on remote desktops, VMs, or older/integrated graphics), so in-browser models can't run here. Try Ollama instead, or a different device."
+      : "This browser doesn't support WebGPU, so in-browser models can't run here. Try a recent Chrome or Edge on desktop.";
   }
   updateModeUI(); // matches the "Rules only" default checked in the markup, before auto-detect below runs
 
