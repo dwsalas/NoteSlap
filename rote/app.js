@@ -18,7 +18,9 @@ const store = {
 const state = {
   rawText: '',
   deck: [],
-  abort: null
+  abort: null,
+  webllmEngine: null,
+  webllmModel: null
 };
 
 /* ============================================================
@@ -190,10 +192,16 @@ function ollamaHost() {
   return $('#host').value.trim().replace(/\/+$/, '');
 }
 
-async function listModels() {
+/**
+ * @param {{silent?: boolean}} opts silent = used for the on-load auto-probe:
+ *   updates the connection dot but never shows a "can't reach Ollama" error,
+ *   since a first-time visitor without Ollama running shouldn't see one.
+ * @returns {Promise<boolean>} whether Ollama responded with at least one model
+ */
+async function listModels({ silent = false } = {}) {
   setConn('busy', 'Connecting…');
   try {
-    const res = await fetch(`${ollamaHost()}/api/tags`);
+    const res = await fetch(`${ollamaHost()}/api/tags`, { signal: AbortSignal.timeout(2000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const { models = [] } = await res.json();
     const select = $('#model');
@@ -201,7 +209,7 @@ async function listModels() {
     if (!models.length) {
       select.innerHTML = '<option value="">No models — run: ollama pull llama3.2</option>';
       setConn('bad', 'No models');
-      return;
+      return false;
     }
     const saved = store.get('model', '');
     for (const m of models) {
@@ -213,11 +221,15 @@ async function listModels() {
     select.value = models.some((m) => m.name === saved) ? saved : models[0].name;
     store.set('host', ollamaHost());
     setConn('ok', `${models.length} model${models.length > 1 ? 's' : ''} ready`);
+    return true;
   } catch (err) {
-    setConn('bad', 'No connection');
-    setExtractStatus(
-      `Can't reach Ollama at ${ollamaHost()}. Start it with OLLAMA_ORIGINS="*" and check the README.`, true
-    );
+    setConn(silent ? 'idle' : 'bad', silent ? 'Not connected' : 'No connection');
+    if (!silent) {
+      setExtractStatus(
+        `Can't reach Ollama at ${ollamaHost()}. Start it with OLLAMA_ORIGINS="*" and check the README.`, true
+      );
+    }
+    return false;
   }
 }
 
@@ -258,7 +270,101 @@ function chunkText(text, size) {
 }
 
 /* ============================================================
-   5. BUILD PIPELINE
+   5. WEBLLM
+   Runs a small instruct model inside this tab via WebGPU — no
+   server, no install. The module is fetched only once the user
+   actually picks this mode, so visitors who never touch it pay
+   nothing for it.
+   ============================================================ */
+
+const WEBLLM_URL = 'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.84/+esm';
+let webllmModulePromise = null;
+
+function loadWebllmModule() {
+  if (!webllmModulePromise) webllmModulePromise = import(WEBLLM_URL);
+  return webllmModulePromise;
+}
+
+function setWebllmStatus(kind, msg) {
+  const el = $('#webllm-status');
+  el.textContent = msg;
+  el.classList.toggle('err', kind === 'bad');
+}
+
+/** model_list entries carry a fixed vram_required_MB, so that doubles as a size sort. */
+async function ensureWebllmModelList() {
+  const select = $('#webllm-model');
+  if (select.dataset.loaded) return;
+  select.innerHTML = '<option value="">Loading model list…</option>';
+  try {
+    const webllm = await loadWebllmModule();
+    const models = webllm.prebuiltAppConfig.model_list
+      .filter((m) => /instruct/i.test(m.model_id))
+      .sort((a, b) => (a.vram_required_MB || Infinity) - (b.vram_required_MB || Infinity));
+
+    select.innerHTML = '';
+    if (!models.length) {
+      select.innerHTML = '<option value="">No instruct models found</option>';
+      return;
+    }
+    for (const m of models) {
+      const opt = document.createElement('option');
+      opt.value = m.model_id;
+      opt.textContent = m.vram_required_MB
+        ? `${m.model_id}  (${(m.vram_required_MB / 1024).toFixed(1)} GB)`
+        : m.model_id;
+      select.appendChild(opt);
+    }
+    const saved = store.get('webllmModel', '');
+    select.value = models.some((m) => m.model_id === saved) ? saved : models[0].model_id;
+    select.dataset.loaded = '1';
+  } catch (err) {
+    select.innerHTML = `<option value="">Couldn't load model list</option>`;
+    setWebllmStatus('bad', `Failed to reach the WebLLM CDN: ${err.message}`);
+  }
+}
+
+async function loadWebllmEngine() {
+  const modelId = $('#webllm-model').value;
+  if (!modelId) return;
+  store.set('webllmModel', modelId);
+
+  $('#webllm-load').disabled = true;
+  showProgress(true);
+  setWebllmStatus('busy', 'Downloading…');
+
+  try {
+    const webllm = await loadWebllmModule();
+    state.webllmEngine = await webllm.CreateMLCEngine(modelId, {
+      initProgressCallback: (report) => {
+        setProgress(report.progress || 0, report.text || 'Loading model…');
+      }
+    });
+    state.webllmModel = modelId;
+    setWebllmStatus('ok', `${modelId} loaded — ready to build`);
+  } catch (err) {
+    state.webllmEngine = null;
+    state.webllmModel = null;
+    setWebllmStatus('bad', `Couldn't load that model: ${err.message}`);
+  } finally {
+    showProgress(false);
+    $('#webllm-load').disabled = false;
+  }
+}
+
+/** Same prompt as the Ollama path, so both modes produce identical output. */
+async function generateWebllm(chunk) {
+  const completion = await state.webllmEngine.chat.completions.create({
+    messages: [{ role: 'user', content: PROMPT.replace('{{CHUNK}}', () => chunk) }],
+    temperature: 0.2,
+    top_p: 0.9,
+    max_tokens: 700
+  });
+  return completion.choices?.[0]?.message?.content || '';
+}
+
+/* ============================================================
+   6. BUILD PIPELINE
    ============================================================ */
 
 async function build() {
@@ -270,6 +376,11 @@ async function build() {
 
   if (mode === 'rules') {
     finishBuild(buildFromRules(text));
+    return;
+  }
+
+  if (mode === 'webllm') {
+    await buildWithWebllm(text);
     return;
   }
 
@@ -308,6 +419,44 @@ async function build() {
   finishBuild(dedupe(lines));
 }
 
+async function buildWithWebllm(text) {
+  if (!state.webllmEngine || state.webllmModel !== $('#webllm-model').value) {
+    setExtractStatus('Click "Download and load" to load the in-browser model first.', true);
+    return;
+  }
+
+  const chunks = chunkText(text, Number($('#chunk').value));
+  state.abort = new AbortController();
+  showProgress(true);
+  $('#build').disabled = true;
+  $('#cancel').hidden = false;
+
+  const lines = [];
+  try {
+    for (let i = 0; i < chunks.length; i++) {
+      if (state.abort.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+      setProgress(i / chunks.length, `Chunk ${i + 1} of ${chunks.length} — the model is reading…`);
+      const raw = await generateWebllm(chunks[i]);
+      lines.push(...raw.split('\n').map(tidyLine).filter(isDrillable));
+      setProgress((i + 1) / chunks.length, `${dedupe(lines).length} lines so far`);
+    }
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      setExtractStatus('Cancelled.');
+    } else {
+      setExtractStatus(`${err.message} — falling back to rule-based splitting.`, true);
+      lines.push(...buildFromRules(text));
+    }
+  } finally {
+    showProgress(false);
+    $('#build').disabled = false;
+    $('#cancel').hidden = true;
+    state.abort = null;
+  }
+
+  finishBuild(dedupe(lines));
+}
+
 function finishBuild(lines) {
   if (!lines.length) {
     setExtractStatus('Nothing usable came out of that. Try a longer document, or paste text directly.', true);
@@ -320,7 +469,7 @@ function finishBuild(lines) {
 }
 
 /* ============================================================
-   6. DECK SCREEN
+   7. DECK SCREEN
    ============================================================ */
 
 function renderDeck() {
@@ -362,7 +511,7 @@ function renderDeck() {
 }
 
 /* ============================================================
-   7. TYPING ENGINE
+   8. TYPING ENGINE
    ============================================================ */
 
 const T = {
@@ -539,7 +688,7 @@ captureEl.addEventListener('input', () => { captureEl.value = ''; });
 window.addEventListener('resize', () => { if (T.active) moveCaret(); });
 
 /* ============================================================
-   8. UI PLUMBING
+   9. UI PLUMBING
    ============================================================ */
 
 function show(name) {
@@ -608,15 +757,29 @@ drop.addEventListener('drop', (e) => {
 $('#file-input').addEventListener('change', (e) => handleFiles(e.target.files));
 $('#paste').addEventListener('input', refreshBuildButton);
 
+function updateModeUI() {
+  const mode = $('input[name="mode"]:checked')?.value;
+  $('#ollama-opts').disabled = mode !== 'ollama';
+  $('#webllm-opts').disabled = mode !== 'webllm';
+  $('#chunk-field').hidden = mode === 'rules';
+  if (mode === 'webllm') ensureWebllmModelList();
+}
+
+let userPickedMode = false; // stops the async auto-detect in init() from clobbering a manual pick
 $$('input[name="mode"]').forEach((r) => r.addEventListener('change', () => {
-  $('#ollama-opts').disabled = $('input[name="mode"]:checked').value !== 'ollama';
+  userPickedMode = true;
+  updateModeUI();
 }));
 
 $('#chunk').addEventListener('input', (e) => { $('#chunk-out').textContent = e.target.value; });
-$('#connect').addEventListener('click', listModels);
+$('#connect').addEventListener('click', () => listModels());
 $('#host').addEventListener('change', () => store.set('host', ollamaHost()));
 $('#build').addEventListener('click', build);
-$('#cancel').addEventListener('click', () => state.abort?.abort());
+$('#webllm-load').addEventListener('click', loadWebllmEngine);
+$('#cancel').addEventListener('click', () => {
+  state.abort?.abort();
+  if ($('input[name="mode"]:checked').value === 'webllm') state.webllmEngine?.interruptGenerate();
+});
 
 $('#deck-back').addEventListener('click', () => show('setup'));
 $('#start').addEventListener('click', () => startSession(state.deck));
@@ -632,11 +795,19 @@ $('#theme-toggle').addEventListener('click', () => {
 });
 
 /* — boot — */
-(function init() {
+(async function init() {
   document.documentElement.dataset.theme =
     store.get('theme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 
   $('#host').value = store.get('host', 'http://localhost:11434');
+
+  const hasWebgpu = 'gpu' in navigator;
+  if (!hasWebgpu) {
+    $('input[name="mode"][value="webllm"]').disabled = true;
+    $('#webllm-sub').textContent =
+      "This browser doesn't support WebGPU, so in-browser models can't run here. Try a recent Chrome or Edge on desktop.";
+  }
+  updateModeUI(); // matches the "Rules only" default checked in the markup, before auto-detect below runs
 
   const saved = store.get('deck', []);
   if (saved.length) {
@@ -649,5 +820,11 @@ $('#theme-toggle').addEventListener('click', () => {
   // GitHub Pages is HTTPS; Ollama is HTTP. Warn before it fails silently.
   if (location.protocol === 'https:') $('#mixed-warning').hidden = false;
 
-  listModels();
+  // Auto-pick a mode that actually works, so a first-time visitor never lands on a connection error.
+  const ollamaOk = await listModels({ silent: true });
+  if (!userPickedMode) {
+    const mode = ollamaOk ? 'ollama' : hasWebgpu ? 'webllm' : 'rules';
+    $(`input[name="mode"][value="${mode}"]`).checked = true;
+    updateModeUI();
+  }
 })();

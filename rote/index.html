@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NoteSlap — type your notes back to yourself</title>
-<meta name="description" content="Turn PDF, DOCX and TXT study notes into typing drills. Runs entirely in your browser, with an optional local Ollama model.">
+<meta name="description" content="Turn PDF, DOCX and TXT study notes into typing drills. Runs entirely in your browser, with an optional local Ollama model or an in-browser WebLLM model.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='22' y='5' rx='3' fill='%23151E24'/><rect x='6' y='19' width='20' height='4' rx='1' fill='%23D9EF7B'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -67,14 +67,21 @@
 
       <div class="radio-set" role="radiogroup" aria-label="Splitting method">
         <label class="radio">
-          <input type="radio" name="mode" value="ollama" checked>
+          <input type="radio" name="mode" value="ollama">
           <span class="radio-body">
             <span class="radio-title">Local model</span>
             <span class="radio-sub">Ollama rewrites your notes into clean, self-contained sentences</span>
           </span>
         </label>
+        <label class="radio" id="radio-webllm">
+          <input type="radio" name="mode" value="webllm">
+          <span class="radio-body">
+            <span class="radio-title">In this browser</span>
+            <span id="webllm-sub" class="radio-sub">Downloads a small model to this tab once, then runs with no server at all</span>
+          </span>
+        </label>
         <label class="radio">
-          <input type="radio" name="mode" value="rules">
+          <input type="radio" name="mode" value="rules" checked>
           <span class="radio-body">
             <span class="radio-title">Rules only</span>
             <span class="radio-sub">Algorithmic sentence splitting. No model, instant, works offline</span>
@@ -82,7 +89,7 @@
         </label>
       </div>
 
-      <fieldset id="ollama-opts" class="opts">
+      <fieldset id="ollama-opts" class="opts" disabled>
         <label class="field">
           <span class="field-label">Ollama host</span>
           <span class="field-row">
@@ -95,12 +102,24 @@
           <span class="field-label">Model</span>
           <select id="model"><option value="">Connect to load models</option></select>
         </label>
-
-        <label class="field">
-          <span class="field-label">Chunk size <span id="chunk-out" class="field-value">3500</span> characters</span>
-          <input id="chunk" type="range" min="1500" max="8000" step="500" value="3500">
-        </label>
       </fieldset>
+
+      <fieldset id="webllm-opts" class="opts" disabled>
+        <label class="field">
+          <span class="field-label">Model</span>
+          <select id="webllm-model"><option value="">Select this mode to load models</option></select>
+        </label>
+
+        <div class="field-row webllm-load-row">
+          <button id="webllm-load" class="btn btn-ghost" type="button">Download and load</button>
+          <p id="webllm-status" class="status"></p>
+        </div>
+      </fieldset>
+
+      <label id="chunk-field" class="field" hidden>
+        <span class="field-label">Chunk size <span id="chunk-out" class="field-value">3500</span> characters</span>
+        <input id="chunk" type="range" min="1500" max="8000" step="500" value="3500">
+      </label>
 
       <div class="actions">
         <button id="build" class="btn btn-primary" type="button" disabled>Build drill set</button>

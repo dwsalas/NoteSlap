@@ -3,11 +3,19 @@
 Turn study notes into typing drills. Upload a PDF, DOCX or TXT; the browser extracts the text,
 splits it into short factual sentences, and you type them back. No backend, no build step.
 
-Sentence splitting runs two ways:
+Sentence splitting runs three ways:
 
 - **Rules only** — algorithmic sentence segmentation. Instant, offline, no model.
 - **Local model** — a local [Ollama](https://ollama.com) instance rewrites the notes into clean,
   self-contained sentences. Better output, because it can fix fragments and resolve "this" and "it".
+- **In this browser** — the same rewrite, done by a small model running in-tab via
+  [WebLLM](https://github.com/mlc-ai/web-llm) and WebGPU. No install, no server — just a one-time
+  model download the browser caches. Needs a browser with WebGPU (recent Chrome or Edge); the
+  option disables itself with an explanation otherwise.
+
+On load, the app pings Ollama and picks whichever mode actually works — Ollama first, then the
+in-browser model if WebGPU is available, then Rules only — so a first-time visitor never lands on
+a broken connection.
 
 ---
 
